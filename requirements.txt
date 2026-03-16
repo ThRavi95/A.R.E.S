@@ -2,7 +2,7 @@ torch
 transformers
 datasets
 biopython
-pytorch-geometric
+torch-geometric
 deepchem
 rdkit
 streamlit
