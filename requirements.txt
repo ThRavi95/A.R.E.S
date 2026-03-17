@@ -2,7 +2,11 @@ torch
 transformers
 datasets
 biopython
+<<<<<<< HEAD
 pytorch-geometric
+=======
+torch-geometric
+>>>>>>> 5dac4ca646d0c19b43c3c3386f7f0850e8bff79c
 deepchem
 rdkit
 streamlit
