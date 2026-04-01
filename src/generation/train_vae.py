@@ -6,8 +6,8 @@ import torch.nn as nn
 
 def loss_fn(recon, x, mu, logvar, beta):
     recon_loss = nn.CrossEntropyLoss(ignore_index=0)(
-        recon.view(-1, recon.size(-1)),
-        x.view(-1)
+        recon.reshape(-1, recon.size(-1)),
+        x.reshape(-1)
     )
 
     kl_loss = -0.5 * torch.mean(
@@ -22,23 +22,27 @@ loader = DataLoader(dataset, batch_size=32, shuffle=True)
 model = VAE()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)  # ✅ lower LR
 
-for epoch in range(3):  # ✅ more epochs
+for epoch in range(40):  # ✅ more epochs
     total_loss = 0
 
     for batch in loader:
         optimizer.zero_grad()
 
-        recon, mu, logvar = model(batch)
+        # SHIFT
+        input_seq = batch[:, :-1]
+        target_seq = batch[:, 1:]
 
-        beta = min(1.0, epoch / 10)  # KL annealing
+        recon, mu, logvar = model(input_seq)
 
-        loss = loss_fn(recon, batch, mu, logvar, beta)
+        beta = min(1.0, epoch / 10)
+
+        loss = loss_fn(recon, target_seq, mu, logvar, beta)
 
         loss.backward()
         optimizer.step()
 
         total_loss += loss.item()
-
+    
     print(f"Epoch {epoch} Loss: {total_loss}")
 
 torch.save(model.state_dict(), "models/vae_model.pt")
