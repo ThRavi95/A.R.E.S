@@ -1,24 +1,21 @@
 import math
 import torch
 import torch.nn as nn
+from tokenizer import PAD, VOCAB_SIZE, MAX_LEN, START
 
-PAD = 0
-VOCAB_SIZE = 23
 EMBED_DIM = 128
 LATENT_DIM = 64
-MAX_LEN = 62
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=MAX_LEN):
         super().__init__()
         pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2, dtype=torch.float32) * (-math.log(10000.0) / d_model)
-        )
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * 
+                           (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer("pe", pe.unsqueeze(0))
+        self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x):
         return x + self.pe[:, :x.size(1)]
@@ -26,51 +23,43 @@ class PositionalEncoding(nn.Module):
 class VAE(nn.Module):
     def __init__(self):
         super().__init__()
-
         self.embedding = nn.Embedding(VOCAB_SIZE, EMBED_DIM, padding_idx=PAD)
         self.pos_encoder = PositionalEncoding(EMBED_DIM)
-
+        
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=EMBED_DIM,
-            nhead=8,
-            dim_feedforward=256,
-            dropout=0.1,
-            batch_first=True
+            d_model=EMBED_DIM, nhead=8, batch_first=True, dropout=0.1
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
-
+        
         self.fc_mu = nn.Linear(EMBED_DIM, LATENT_DIM)
         self.fc_logvar = nn.Linear(EMBED_DIM, LATENT_DIM)
-
+        
         self.decoder_fc = nn.Linear(LATENT_DIM, EMBED_DIM)
-
+        
         decoder_layer = nn.TransformerDecoderLayer(
-            d_model=EMBED_DIM,
-            nhead=8,
-            dim_feedforward=256,
-            dropout=0.1,
-            batch_first=True
+            d_model=EMBED_DIM, nhead=8, batch_first=True, dropout=0.1
         )
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=2)
-
+        
         self.output_fc = nn.Linear(EMBED_DIM, VOCAB_SIZE)
 
     def _causal_mask(self, size, device):
-        return torch.triu(
-            torch.full((size, size), float("-inf"), device=device),
-            diagonal=1
-        )
+        mask = torch.triu(torch.full((size, size), float('-inf'), device=device), diagonal=1)
+        return mask
 
     def encode(self, x):
-        pad_mask = (x == PAD)
+        """Encode with padding mask and masked mean pooling."""
+        src_key_padding_mask = (x == PAD)
         x_emb = self.pos_encoder(self.embedding(x))
-        h = self.encoder(x_emb, src_key_padding_mask=pad_mask)
-
-        valid_mask = (~pad_mask).unsqueeze(-1)
-        h_sum = (h * valid_mask).sum(dim=1)
-        lengths = valid_mask.sum(dim=1).clamp(min=1)
-        h_pooled = h_sum / lengths
-
+        h = self.encoder(x_emb, src_key_padding_mask=src_key_padding_mask)
+        
+        # Masked mean pooling
+        valid_mask = (~src_key_padding_mask).float().unsqueeze(-1)
+        h_masked = h * valid_mask
+        h_sum = h_masked.sum(dim=1)
+        seq_len = valid_mask.sum(dim=1)
+        h_pooled = h_sum / seq_len.clamp(min=1.0)
+        
         mu = self.fc_mu(h_pooled)
         logvar = self.fc_logvar(h_pooled)
         return mu, logvar
@@ -81,28 +70,29 @@ class VAE(nn.Module):
         return mu + eps * std
 
     def decode(self, z, decoder_input):
-        batch_size, seq_len = decoder_input.size()
-        tgt_pad_mask = (decoder_input == PAD)
+        """Decode with causal mask and padding mask."""
+        batch_size, seq_len = decoder_input.shape
+        tgt_key_padding_mask = (decoder_input == PAD)
         tgt_mask = self._causal_mask(seq_len, decoder_input.device)
-
-        memory = self.decoder_fc(z).unsqueeze(1)
-        memory = memory.repeat(1, seq_len, 1)
-
+        
+        # Memory: repeat z across sequence positions
+        memory = self.decoder_fc(z).unsqueeze(1).repeat(1, seq_len, 1)
+        
         tgt = self.pos_encoder(self.embedding(decoder_input))
-        out = self.decoder(
-            tgt=tgt,
-            memory=memory,
+        output = self.decoder(
+            tgt, memory,
             tgt_mask=tgt_mask,
-            tgt_key_padding_mask=tgt_pad_mask
+            tgt_key_padding_mask=tgt_key_padding_mask
         )
-        return self.output_fc(out)
+        return self.output_fc(output)
 
     def forward(self, x):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
-
-        decoder_input = x[:, :-1]
-        target_output = x[:, 1:]
-
+        
+        # Shifted targets for teacher forcing
+        decoder_input = x[:, :-1]  # All but last token
         recon = self.decode(z, decoder_input)
-        return recon, target_output, mu, logvar
+        target = x[:, 1:]          # All but first token
+        
+        return recon, target, mu, logvar

@@ -2,53 +2,59 @@ import torch
 import torch.nn.functional as F
 from vae_model import VAE
 from tokenizer import decode, START, END, PAD
+import os
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
+
+model_path = "models/vae_model.pt"
+if not os.path.exists(model_path):
+    raise FileNotFoundError(f"Train first: {model_path}")
 
 model = VAE().to(device)
-model.load_state_dict(torch.load("models/vae_model.pt", map_location=device))
+model.load_state_dict(torch.load(model_path, map_location=device))
 model.eval()
 
-def sample_from_logits(logits, prev_tokens, temperature=0.8):
+def sample_next_token(logits, prev_tokens, temperature=0.8):
+    """Sample with repetition penalty and mask specials."""
     logits = logits.clone()
-
-    logits[PAD] = -1e9
-    logits[START] = -1e9
-
+    
+    # Mask invalid tokens
+    logits[PAD] = float('-inf')
+    logits[START] = float('-inf')
+    
+    # Repetition penalty
+    for token in prev_tokens[-4:]:
+        logits[token] *= 0.8
+    
     probs = F.softmax(logits / temperature, dim=-1)
-
-    for t in prev_tokens[-5:]:
-        probs[t] *= 0.7
-
-    probs = probs / probs.sum()
-    return torch.multinomial(probs, 1).item()
+    return torch.multinomial(probs, num_samples=1).item()
 
 @torch.no_grad()
-def generate(n=10, max_len=60):
+def generate(n=10, max_new_tokens=60):
     results = []
-
-    for _ in range(n):
+    
+    for i in range(n):
         z = torch.randn(1, 64, device=device)
         tokens = [START]
-
-        for _ in range(max_len):
+        
+        for _ in range(max_new_tokens):
             input_seq = torch.tensor([tokens], dtype=torch.long, device=device)
-            out = model.decode(z, input_seq)
-            next_token = sample_from_logits(out[0, -1], tokens)
-
+            logits = model.decode(z, input_seq)[0, -1]
+            
+            next_token = sample_next_token(logits, tokens)
             tokens.append(next_token)
-
+            
             if next_token == END:
                 break
-
-            if len(tokens) >= 6 and len(set(tokens[-5:])) == 1:
+            if len(set(tokens[-5:])) == 1:  # Repetition
                 break
-
-        results.append(decode(tokens))
-
+        
+        peptide = decode(tokens)
+        results.append(peptide)
+        print(f"{i+1:2d}: {peptide}")
+    
     return results
 
 if __name__ == "__main__":
-    peptides = generate(10)
-    for p in peptides:
-        print(p)
+    generate(10)
