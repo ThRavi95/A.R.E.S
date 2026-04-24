@@ -35,6 +35,7 @@ class VAE(nn.Module):
         self.fc_logvar = nn.Linear(EMBED_DIM, LATENT_DIM)
         
         self.decoder_fc = nn.Linear(LATENT_DIM, EMBED_DIM)
+        self.latent_to_tgt = nn.Linear(LATENT_DIM, EMBED_DIM)
         
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=EMBED_DIM, nhead=8, batch_first=True, dropout=0.1
@@ -44,8 +45,11 @@ class VAE(nn.Module):
         self.output_fc = nn.Linear(EMBED_DIM, VOCAB_SIZE)
 
     def _causal_mask(self, size, device):
-        mask = torch.triu(torch.full((size, size), float('-inf'), device=device), diagonal=1)
-        return mask
+        # 2D bool mask expected by Transformer: True means "masked".
+        return torch.triu(
+            torch.ones(size, size, dtype=torch.bool, device=device),
+            diagonal=1
+        )
 
     def encode(self, x):
         """Encode with padding mask and masked mean pooling."""
@@ -71,14 +75,15 @@ class VAE(nn.Module):
 
     def decode(self, z, decoder_input):
         """Decode with causal mask and padding mask."""
-        batch_size, seq_len = decoder_input.shape
+        _, seq_len = decoder_input.shape
         tgt_key_padding_mask = (decoder_input == PAD)
         tgt_mask = self._causal_mask(seq_len, decoder_input.device)
         
         # Memory: repeat z across sequence positions
         memory = self.decoder_fc(z).unsqueeze(1).repeat(1, seq_len, 1)
         
-        tgt = self.pos_encoder(self.embedding(decoder_input))
+        latent_bias = self.latent_to_tgt(z).unsqueeze(1)
+        tgt = self.pos_encoder(self.embedding(decoder_input) + latent_bias)
         output = self.decoder(
             tgt, memory,
             tgt_mask=tgt_mask,
