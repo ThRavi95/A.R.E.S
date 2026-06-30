@@ -7,6 +7,10 @@ from dataset import PeptideDataset
 from vae_model import VAE, PAD
 from tokenizer import VOCAB_SIZE
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+DEFAULT_DATA = os.path.join(PROJECT_ROOT, "data", "processed", "peptides.csv")
+DEFAULT_OUT = os.path.join(PROJECT_ROOT, "models", "vae_model.pt")
+
 def compute_loss(recon, target, mu, logvar, beta, free_bits=0.02):
     recon_loss = nn.CrossEntropyLoss(ignore_index=PAD, reduction='mean')(
         recon.reshape(-1, VOCAB_SIZE), target.reshape(-1)
@@ -65,7 +69,7 @@ def train(args):
 
     model = VAE().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    os.makedirs("models", exist_ok=True)
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
 
     best_val = float("inf")
     warmup_epochs = max(1, args.warmup_epochs)
@@ -121,8 +125,8 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="data/processed/peptides.csv")
-    parser.add_argument("--out", default="models/vae_model.pt")
+    parser.add_argument("--data", default=DEFAULT_DATA)
+    parser.add_argument("--out", default=DEFAULT_OUT)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-4)

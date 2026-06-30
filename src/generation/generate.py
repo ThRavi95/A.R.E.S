@@ -5,10 +5,12 @@ from vae_model import VAE, LATENT_DIM
 from tokenizer import decode, START, END, PAD, AA_VOCAB
 import os
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
-model_path = "models/vae_model.pt"
+model_path = os.path.join(PROJECT_ROOT, "models", "vae_model.pt")
 model = VAE().to(device)
 
 
@@ -46,14 +48,18 @@ def generate(n=10, max_new_tokens=60):
     
     for i in range(n):
         z = torch.randn(1, LATENT_DIM, device=device)
+        hidden = model.decoder_fc(z).unsqueeze(0)
         tokens = [START]
+        current_token = torch.tensor([[START]], dtype=torch.long, device=device)
         
         for _ in range(max_new_tokens):
-            input_seq = torch.tensor([tokens], dtype=torch.long, device=device)
-            logits = model.decode(z, input_seq)[0, -1]
+            embedded = model.embedding(current_token)
+            gru_output, hidden = model.decoder_gru(embedded, hidden)
+            logits = model.output_fc(gru_output)[0, -1]
             
             next_token = sample_next_token(logits, tokens)
             tokens.append(next_token)
+            current_token = torch.tensor([[next_token]], dtype=torch.long, device=device)
             
             if next_token == END:
                 break

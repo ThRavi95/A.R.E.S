@@ -35,21 +35,13 @@ class VAE(nn.Module):
         self.fc_logvar = nn.Linear(EMBED_DIM, LATENT_DIM)
         
         self.decoder_fc = nn.Linear(LATENT_DIM, EMBED_DIM)
-        self.latent_to_tgt = nn.Linear(LATENT_DIM, EMBED_DIM)
-        
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=EMBED_DIM, nhead=8, batch_first=True, dropout=0.1
+        self.decoder_gru = nn.GRU(
+            input_size=EMBED_DIM,
+            hidden_size=EMBED_DIM,
+            batch_first=True,
         )
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=2)
         
         self.output_fc = nn.Linear(EMBED_DIM, VOCAB_SIZE)
-
-    def _causal_mask(self, size, device):
-        # 2D bool mask expected by Transformer: True means "masked".
-        return torch.triu(
-            torch.ones(size, size, dtype=torch.bool, device=device),
-            diagonal=1
-        )
 
     def encode(self, x):
         """Encode with padding mask and masked mean pooling."""
@@ -73,23 +65,22 @@ class VAE(nn.Module):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def decode(self, z, decoder_input):
-        """Decode with causal mask and padding mask."""
-        _, seq_len = decoder_input.shape
-        tgt_key_padding_mask = (decoder_input == PAD)
-        tgt_mask = self._causal_mask(seq_len, decoder_input.device)
-        
-        # Memory: repeat z across sequence positions
-        memory = self.decoder_fc(z).unsqueeze(1).repeat(1, seq_len, 1)
-        
-        latent_bias = self.latent_to_tgt(z).unsqueeze(1)
-        tgt = self.pos_encoder(self.embedding(decoder_input) + latent_bias)
-        output = self.decoder(
-            tgt, memory,
-            tgt_mask=tgt_mask,
-            tgt_key_padding_mask=tgt_key_padding_mask
-        )
-        return self.output_fc(output)
+    def decode(self, z, target):
+        """Autoregressive GRU decode with teacher forcing."""
+        # z: (batch, LATENT_DIM) -> (batch, EMBED_DIM)
+        decoder_hidden = self.decoder_fc(z)
+
+        # h_0 for GRU: (1, batch, EMBED_DIM)
+        h_0 = decoder_hidden.unsqueeze(0)
+
+        # target tokens: (batch, seq_len) -> embeddings: (batch, seq_len, EMBED_DIM)
+        target_emb = self.embedding(target)
+
+        # GRU output: (batch, seq_len, EMBED_DIM), hidden state: (1, batch, EMBED_DIM)
+        gru_output, _ = self.decoder_gru(target_emb, h_0)
+
+        # Logits: (batch, seq_len, VOCAB_SIZE)
+        return self.output_fc(gru_output)
 
     def forward(self, x):
         mu, logvar = self.encode(x)
