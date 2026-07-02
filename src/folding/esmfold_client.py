@@ -84,8 +84,13 @@ class ESMFoldClient:
             logger.warning("ESMFold request failed after retries: %s", exc)
             return None
 
+        pdb_text = response.text.strip()
+        if not pdb_text:
+            logger.warning("ESMFold returned an empty structure payload for sequence length %d", len(sequence))
+            return None
+
         try:
-            output_file.write_text(response.text)
+            output_file.write_text(pdb_text)
         except OSError as exc:
             raise RuntimeError(f"Failed to write PDB output to {output_file}") from exc
 

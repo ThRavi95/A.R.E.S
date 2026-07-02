@@ -8,6 +8,7 @@ import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Dict, Mapping, Tuple
 
 
 logger = logging.getLogger(__name__)
@@ -118,7 +119,7 @@ class VinaDocker:
 
         return str(log_path)
 
-    def run_docking_batch(self, ligands_dict: dict, max_workers: int) -> dict:
+    def run_docking_batch(self, ligands_dict: Mapping[str, str], max_workers: int) -> Dict[str, float]:
         """Run docking across multiple ligands in parallel and return affinities."""
         if max_workers < 1:
             raise ValueError("max_workers must be at least 1")
@@ -126,7 +127,7 @@ class VinaDocker:
         if not ligands_dict:
             return {}
 
-        results = {}
+        results: Dict[str, float] = {}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(self._dock_candidate, candidate_id, pdbqt_path): candidate_id
@@ -161,7 +162,7 @@ class VinaDocker:
 
         raise ValueError(f"Could not find a Mode 1 affinity score in {log_path}")
 
-    def _dock_candidate(self, candidate_id, ligand_pdbqt: str):
+    def _dock_candidate(self, candidate_id: str, ligand_pdbqt: str) -> Tuple[str, float]:
         """Dock one ligand and extract its affinity score."""
         ligand_path = self._resolve_existing_file(ligand_pdbqt, f"ligand PDBQT for {candidate_id}")
         log_path = self._batch_log_path(ligand_path, candidate_id)
@@ -170,7 +171,7 @@ class VinaDocker:
         return candidate_id, affinity_score
 
     @staticmethod
-    def _batch_log_path(ligand_path: Path, candidate_id) -> Path:
+    def _batch_log_path(ligand_path: Path, candidate_id: str) -> Path:
         safe_candidate_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(candidate_id)).strip("_.-")
         if not safe_candidate_id:
             safe_candidate_id = "candidate"
