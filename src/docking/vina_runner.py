@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
 
 
 class VinaDocker:
@@ -113,6 +118,33 @@ class VinaDocker:
 
         return str(log_path)
 
+    def run_docking_batch(self, ligands_dict: dict, max_workers: int) -> dict:
+        """Run docking across multiple ligands in parallel and return affinities."""
+        if max_workers < 1:
+            raise ValueError("max_workers must be at least 1")
+
+        if not ligands_dict:
+            return {}
+
+        results = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._dock_candidate, candidate_id, pdbqt_path): candidate_id
+                for candidate_id, pdbqt_path in ligands_dict.items()
+            }
+
+            for future in as_completed(futures):
+                candidate_id = futures[future]
+                try:
+                    returned_candidate_id, affinity_score = future.result()
+                except Exception as exc:
+                    logger.warning("Docking failed for %s: %s", candidate_id, exc)
+                    continue
+
+                results[returned_candidate_id] = affinity_score
+
+        return results
+
     def parse_affinity(self, log_file: str) -> float:
         """Extract the top-mode affinity score from a Vina log file."""
         log_path = self._resolve_existing_file(log_file, "Vina log")
@@ -128,6 +160,21 @@ class VinaDocker:
                 return float(match.group(1))
 
         raise ValueError(f"Could not find a Mode 1 affinity score in {log_path}")
+
+    def _dock_candidate(self, candidate_id, ligand_pdbqt: str):
+        """Dock one ligand and extract its affinity score."""
+        ligand_path = self._resolve_existing_file(ligand_pdbqt, f"ligand PDBQT for {candidate_id}")
+        log_path = self._batch_log_path(ligand_path, candidate_id)
+        output_log = self.run_docking(str(ligand_path), str(log_path))
+        affinity_score = self.parse_affinity(output_log)
+        return candidate_id, affinity_score
+
+    @staticmethod
+    def _batch_log_path(ligand_path: Path, candidate_id) -> Path:
+        safe_candidate_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(candidate_id)).strip("_.-")
+        if not safe_candidate_id:
+            safe_candidate_id = "candidate"
+        return ligand_path.with_name(f"{ligand_path.stem}_{safe_candidate_id}.log")
 
     @staticmethod
     def _resolve_existing_file(path: str, label: str) -> Path:
